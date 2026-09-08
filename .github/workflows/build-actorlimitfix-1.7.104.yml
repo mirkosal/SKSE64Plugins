@@ -8,6 +8,7 @@ on:
     paths:
       - '.github/workflows/build-actorlimitfix-1.7.104.yml'
 
+# The default branch owns the workflow; the build itself checks out the dedicated port branch.
 jobs:
   build:
     runs-on: windows-2022
