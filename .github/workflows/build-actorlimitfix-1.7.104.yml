@@ -1,0 +1,88 @@
+name: Build ActorLimitFix for Skyrim 1.7.104
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-actorlimitfix-1.7.104.yml'
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout ActorLimitFix 1.7.104 port
+        uses: actions/checkout@v4
+        with:
+          ref: actorlimitfix-skyrim-1.7.104-port
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup vcpkg 2024.05.24
+        shell: pwsh
+        run: |
+          $vcpkg = Join-Path $env:RUNNER_TEMP 'vcpkg-actorlimitfix'
+          git clone --branch 2024.05.24 --depth 1 https://github.com/microsoft/vcpkg.git $vcpkg
+          & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          & "$vcpkg\vcpkg.exe" install nlohmann-json:x64-windows-static-md spdlog:x64-windows-static-md
+          & "$vcpkg\vcpkg.exe" integrate install
+          "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Apply Skyrim 1.7.104 compatibility patch
+        shell: pwsh
+        run: python ci\patch_actorlimitfix_1_7_104.py
+
+      - name: Prepare dummy Skyrim deployment directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\_ci_skyrim\Data\SKSE\Plugins" | Out-Null
+
+      - name: Build Release Anniversary Edition
+        shell: pwsh
+        run: |
+          msbuild ActorLimitFix\ActorLimitFix.sln /m `
+            /p:Configuration=ReleaseAnniversaryEdition `
+            /p:Platform=x64 `
+            /p:SKYRIM_SPECIAL_EDITION_PATH="$env:GITHUB_WORKSPACE\_ci_skyrim" `
+            /p:VcpkgRoot="$env:VCPKG_ROOT\" `
+            /p:VcpkgEnabled=true
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package Vortex-ready ZIP
+        shell: pwsh
+        run: |
+          $dll = "$env:GITHUB_WORKSPACE\_ci_skyrim\Data\SKSE\Plugins\ActorLimitFix.dll"
+          if (-not (Test-Path $dll)) {
+            $found = Get-ChildItem -Path . -Filter ActorLimitFix.dll -Recurse | Select-Object -First 1
+            if (-not $found) {
+              Write-Error 'ActorLimitFix.dll was not produced by the build.'
+              exit 1
+            }
+            $dll = $found.FullName
+          }
+
+          New-Item -ItemType Directory -Force -Path package\SKSE\Plugins | Out-Null
+          Copy-Item $dll package\SKSE\Plugins\ActorLimitFix.dll
+
+          @"
+          Actor Limit Fix test build
+          Target Skyrim runtime: 1.7.104.0
+          Target SKSE: 2.3.1
+          Address Library: v13 / format 5
+          Source: KernalsEgg/SKSE64Plugins ActorLimitFix v9 source
+          Port branch: actorlimitfix-skyrim-1.7.104-port
+          Build commit: $env:GITHUB_SHA
+          Note: existing ActorLimitFix.json is intentionally not replaced.
+          "@ | Set-Content -Path package\BUILD_INFO.txt -Encoding utf8
+
+          Compress-Archive -Path package\* -DestinationPath ActorLimitFix-Skyrim-1.7.104-Test.zip -Force
+
+      - name: Upload Vortex-ready ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ActorLimitFix-Skyrim-1.7.104-Test
+          path: ActorLimitFix-Skyrim-1.7.104-Test.zip
+          if-no-files-found: error
+          retention-days: 14
