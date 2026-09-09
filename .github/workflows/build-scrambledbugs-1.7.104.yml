@@ -59,7 +59,7 @@ jobs:
             /p:VcpkgEnabled=false
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Package Vortex-ready ZIP
+      - name: Package full Vortex-ready mod ZIP
         shell: pwsh
         run: |
           $dll = "$env:GITHUB_WORKSPACE\_ci_skyrim\Data\SKSE\Plugins\ScrambledBugs.dll"
@@ -72,27 +72,48 @@ jobs:
             $dll = $found.FullName
           }
 
-          New-Item -ItemType Directory -Force -Path package\SKSE\Plugins | Out-Null
-          Copy-Item $dll package\SKSE\Plugins\ScrambledBugs.dll
+          $plugins = 'package\SKSE\Plugins'
+          $settingsTarget = Join-Path $plugins 'ScrambledBugs'
+          New-Item -ItemType Directory -Force -Path $settingsTarget | Out-Null
+
+          # Native plugin rebuilt for Skyrim 1.7.104 / Address Library format 5.
+          Copy-Item $dll (Join-Path $plugins 'ScrambledBugs.dll')
+
+          # Ship the complete stock configuration so missing/empty JSON files are replaced.
+          Copy-Item 'ScrambledBugs\ScrambledBugs.json' (Join-Path $plugins 'ScrambledBugs.json') -Force
+          Copy-Item 'ScrambledBugs\Settings\*' $settingsTarget -Recurse -Force
+
+          # Validate the file that caused the user's fatal parser error.
+          $playback = Join-Path $settingsTarget 'Fixes\QuickShot\PlaybackSpeed.json'
+          if (-not (Test-Path $playback)) {
+            Write-Error 'PlaybackSpeed.json is missing from the package.'
+            exit 1
+          }
+          $parsed = Get-Content $playback -Raw | ConvertFrom-Json
+          if ($null -eq $parsed.number) {
+            Write-Error 'PlaybackSpeed.json is invalid or missing the number field.'
+            exit 1
+          }
 
           @"
-          Scrambled Bugs test build
+          Scrambled Bugs full test build
           Target Skyrim runtime: 1.7.104.0
           Target SKSE: 2.3.1
           Address Library: v13 / format 5
           Source: KernalsEgg/SKSE64Plugins Scrambled Bugs Version 22 source
           Port branch: scrambledbugs-skyrim-1.7.104-port
           Build commit: $env:GITHUB_SHA
-          Note: existing ScrambledBugs.json is intentionally not replaced.
+          Includes: ScrambledBugs.dll, ScrambledBugs.json, complete ScrambledBugs settings tree.
+          PlaybackSpeed.json is validated during packaging.
           Runtime-specific hooks/patterns still require in-game smoke testing on 1.7.104.
           "@ | Set-Content -Path package\BUILD_INFO.txt -Encoding utf8
 
-          Compress-Archive -Path package\* -DestinationPath ScrambledBugs-Skyrim-1.7.104-Test.zip -Force
+          Compress-Archive -Path package\* -DestinationPath ScrambledBugs-Skyrim-1.7.104-Full-Test.zip -Force
 
-      - name: Upload Vortex-ready ZIP
+      - name: Upload full Vortex-ready ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: ScrambledBugs-Skyrim-1.7.104-Test
-          path: ScrambledBugs-Skyrim-1.7.104-Test.zip
+          name: ScrambledBugs-Skyrim-1.7.104-Full-Test
+          path: ScrambledBugs-Skyrim-1.7.104-Full-Test.zip
           if-no-files-found: error
           retention-days: 14
