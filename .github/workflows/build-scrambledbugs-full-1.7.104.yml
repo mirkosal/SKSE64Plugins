@@ -1,0 +1,97 @@
+name: Build full ScrambledBugs mod for Skyrim 1.7.104
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/build-scrambledbugs-full-1.7.104.yml'
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout ScrambledBugs 1.7.104 port
+        uses: actions/checkout@v4
+        with:
+          ref: scrambledbugs-skyrim-1.7.104-port
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Setup current vcpkg
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkg = Join-Path $env:RUNNER_TEMP 'vcpkg-scrambledbugs'
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git $vcpkg
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$vcpkg\bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$vcpkg\vcpkg.exe" install nlohmann-json:x64-windows-static-md spdlog:x64-windows-static-md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Apply Skyrim 1.7.104 compatibility patch
+        shell: pwsh
+        run: |
+          python ci\patch_scrambledbugs_1_7_104.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Prepare dummy Skyrim deployment directory
+        shell: pwsh
+        run: New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\_ci_skyrim\Data\SKSE\Plugins" | Out-Null
+
+      - name: Build Release Anniversary Edition
+        shell: pwsh
+        run: |
+          msbuild ScrambledBugs\ScrambledBugs.sln /m `
+            /p:Configuration=ReleaseAnniversaryEdition `
+            /p:Platform=x64 `
+            /p:SKYRIM_SPECIAL_EDITION_PATH="$env:GITHUB_WORKSPACE\_ci_skyrim" `
+            /p:VcpkgRoot="$env:VCPKG_ROOT\" `
+            /p:VcpkgEnabled=false
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package complete Vortex mod
+        shell: pwsh
+        run: |
+          $dll = "$env:GITHUB_WORKSPACE\_ci_skyrim\Data\SKSE\Plugins\ScrambledBugs.dll"
+          if (-not (Test-Path $dll)) {
+            $found = Get-ChildItem -Path . -Filter ScrambledBugs.dll -Recurse | Select-Object -First 1
+            if (-not $found) { throw 'ScrambledBugs.dll was not produced by the build.' }
+            $dll = $found.FullName
+          }
+
+          $plugins = 'package\SKSE\Plugins'
+          $settingsTarget = Join-Path $plugins 'ScrambledBugs'
+          New-Item -ItemType Directory -Force -Path $settingsTarget | Out-Null
+          Copy-Item $dll (Join-Path $plugins 'ScrambledBugs.dll') -Force
+          Copy-Item 'ScrambledBugs\ScrambledBugs.json' (Join-Path $plugins 'ScrambledBugs.json') -Force
+          Copy-Item 'ScrambledBugs\Settings\*' $settingsTarget -Recurse -Force
+
+          $playback = Join-Path $settingsTarget 'Fixes\QuickShot\PlaybackSpeed.json'
+          if (-not (Test-Path $playback)) { throw 'PlaybackSpeed.json missing from package.' }
+          $parsed = Get-Content $playback -Raw | ConvertFrom-Json
+          if ($parsed.number -ne 2.0) { throw 'PlaybackSpeed.json failed validation.' }
+
+          @"
+          Scrambled Bugs full test build
+          Target Skyrim runtime: 1.7.104.0
+          Target SKSE: 2.3.1
+          Address Library: v13 / format 5
+          Includes rebuilt DLL plus the complete stock ScrambledBugs configuration tree.
+          PlaybackSpeed.json validated during packaging.
+          "@ | Set-Content -Path package\BUILD_INFO.txt -Encoding utf8
+
+          Compress-Archive -Path package\* -DestinationPath ScrambledBugs-Skyrim-1.7.104-Full-Test.zip -Force
+
+      - name: Upload full Vortex-ready ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: ScrambledBugs-Skyrim-1.7.104-Full-Test
+          path: ScrambledBugs-Skyrim-1.7.104-Full-Test.zip
+          if-no-files-found: error
+          retention-days: 14
