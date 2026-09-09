@@ -9,6 +9,7 @@ on:
       - '.github/workflows/build-actorlimitfix-1.7.104.yml'
 
 # The default branch owns the workflow; the build itself checks out the dedicated port branch.
+# The port branch now wires the vcpkg include/lib directories directly into the MSBuild property sheet.
 jobs:
   build:
     runs-on: windows-2022
@@ -36,10 +37,7 @@ jobs:
           & "$vcpkg\vcpkg.exe" install nlohmann-json:x64-windows-static-md spdlog:x64-windows-static-md
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-          $tripletRoot = Join-Path $vcpkg 'installed\x64-windows-static-md'
           "VCPKG_ROOT=$vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "INCLUDE=$(Join-Path $tripletRoot 'include');$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "LIB=$(Join-Path $tripletRoot 'lib');$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Apply Skyrim 1.7.104 compatibility patch
         shell: pwsh
